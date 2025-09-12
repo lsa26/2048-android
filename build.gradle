@@ -64,4 +64,5 @@ android {
 
 dependencies {
     implementation 'de.cketti.library.changelog:ckchangelog-legacy-dialog:2.0.0-SNAPSHOT'
+    compile group: 'io.rollout.rox', name: 'rox-android', version: '6.0.0'
 }
