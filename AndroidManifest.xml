@@ -1,18 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.uberspot.a2048">
 
-    <!-- Permissions (peuvent rester publiques) -->
+    <!-- Permissions -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
+    <!-- ⚠️ Pas de commentaires ici dans la balise <application> -->
     <application
-        android:name=".App"               <!-- NEW: on pointe vers la classe Application -->
+        android:name=".App"
         android:allowBackup="true"
         android:icon="@drawable/ic_2048"
         android:label="@string/app_name"
         android:theme="@style/AppTheme">
 
-        <!-- meta-data: NE PAS mettre de valeur en dur -->
+        <!-- meta-data: OK ici (après la fermeture de la balise d'ouverture) -->
         <meta-data
             android:name="rox.apiKey"
             android:value="${roxApiKey}" />
