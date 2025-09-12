@@ -6,6 +6,7 @@ import android.content.SharedPreferences.Editor;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.graphics.Color;
+import android.os.Build;
 import android.os.Bundle;
 import android.preference.PreferenceManager;
 import android.provider.Settings;
@@ -18,6 +19,7 @@ import android.view.WindowManager.LayoutParams;
 import android.webkit.WebSettings;
 import android.webkit.WebSettings.RenderPriority;
 import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.Toast;
 
 import java.util.Locale;
@@ -71,15 +73,7 @@ public class MainActivity extends Activity {
 
         setContentView(R.layout.activity_main);
 
-        // ⬇️ Applique la couleur d’arrière-plan selon le flag Unify
-        applyBackground(App.flags.backgroundColor.getValue());
-
-        DialogChangeLog changeLog = DialogChangeLog.newInstance(this);
-        if (changeLog.isFirstRun()) {
-            changeLog.getLogDialog().show();
-        }
-
-        // Load webview with game
+        // WebView setup
         mWebView = findViewById(R.id.mainWebView);
         WebSettings settings = mWebView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -87,6 +81,14 @@ public class MainActivity extends Activity {
         settings.setDatabaseEnabled(true);
         settings.setRenderPriority(RenderPriority.HIGH);
         settings.setDatabasePath(getFilesDir().getParentFile().getPath() + "/databases");
+
+        // Inject background override after each page load
+        mWebView.setWebViewClient(new WebViewClient() {
+            @Override public void onPageFinished(WebView view, String url) {
+                // applique (native + CSS) en fonction du flag
+                applyBackgroundFromFlag();
+            }
+        });
 
         // If there is a previous instance restore it in the webview
         if (savedInstanceState != null) {
@@ -110,20 +112,22 @@ public class MainActivity extends Activity {
             } else if (event.getAction() == MotionEvent.ACTION_DOWN) {
                 mLastTouch = currentTime;
             }
-            // return so that the event isn't consumed but used
-            // by the webview as well
+            // return so that the event isn't consumed but used by the webview as well
             return false;
         });
 
         pressBackToast = Toast.makeText(getApplicationContext(), R.string.press_back_again_to_exit,
                 Toast.LENGTH_SHORT);
+
+        // Met aussi la couleur dès maintenant (avant la fin de chargement) pour le décor
+        applyBackgroundFromFlag();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        // Re-applique la couleur si le flag a changé
-        applyBackground(App.flags.backgroundColor.getValue());
+        // Ré-applique (utile si le flag a changé pendant que l’app était en pause)
+        applyBackgroundFromFlag();
         mWebView.loadUrl("file:///android_asset/2048/index.html?lang=" + Locale.getDefault().getLanguage());
     }
 
@@ -171,18 +175,60 @@ public class MainActivity extends Activity {
         }
     }
 
-    /**
-     * Applique la couleur d’arrière-plan selon la valeur du flag
-     */
-    private void applyBackground(String value) {
-        int color;
-        if ("Blue".equals(value))       color = Color.parseColor("#0D47A1");
-        else if ("Green".equals(value)) color = Color.parseColor("#1B5E20");
-        else if ("Yellow".equals(value))color = Color.parseColor("#FBC02D");
-        else if ("Dark".equals(value))  color = Color.parseColor("#121212");
-        else                            color = Color.WHITE;
+    // ---------- Background helpers ----------
 
+    private void applyBackgroundFromFlag() {
+        String value = App.flags.backgroundColor.getValue();
+
+        // 1) couleur int pour les vues natives
+        int color = colorFor(value);
+
+        // Applique au decorView et à la WebView (fond de vue)
         View root = getWindow().getDecorView();
         root.setBackgroundColor(color);
+        if (mWebView != null) {
+            mWebView.setBackgroundColor(color);
+        }
+
+        // 2) injection CSS dans la page 2048 (le HTML définit son propre background)
+        String hex = hexFor(value);
+        injectCssToPage(hex);
+    }
+
+    private int colorFor(String value) {
+        if ("Blue".equals(value))       return Color.parseColor("#0D47A1");
+        else if ("Green".equals(value)) return Color.parseColor("#1B5E20");
+        else if ("Yellow".equals(value))return Color.parseColor("#FBC02D");
+        else if ("Dark".equals(value))  return Color.parseColor("#121212");
+        else                            return Color.WHITE; // "White" ou défaut
+    }
+
+    private String hexFor(String value) {
+        if ("Blue".equals(value))       return "#0D47A1";
+        else if ("Green".equals(value)) return "#1B5E20";
+        else if ("Yellow".equals(value))return "#FBC02D";
+        else if ("Dark".equals(value))  return "#121212";
+        else                            return "#FFFFFF";
+    }
+
+    /**
+     * Injecte/Met à jour un <style id="__bg"> pour forcer le fond de la page
+     */
+    private void injectCssToPage(String hex) {
+        if (mWebView == null) return;
+
+        // CSS robuste avec !important
+        String js = "(function(){"
+                + "var css='html,body{background:"+hex+" !important;}';"
+                + "var s=document.getElementById('__bg');"
+                + "if(!s){s=document.createElement('style');s.id='__bg';document.head.appendChild(s);} "
+                + "s.innerHTML=css;"
+                + "})();";
+
+        if (Build.VERSION.SDK_INT >= 19) {
+            mWebView.evaluateJavascript(js, null);
+        } else {
+            mWebView.loadUrl("javascript:" + js);
+        }
     }
 }
