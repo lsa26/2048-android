@@ -30,9 +30,10 @@ android {
         targetSdkVersion 28
         versionCode 25
         versionName "2.2"
-        manifestPlaceholders = [
-          roxApiKey: (System.getenv("ROX_API_KEY") ?: "dev-placeholder")
-        ]
+    manifestPlaceholders = [
+      roxApiKey: (System.getenv("ROX_API_KEY")
+                  ?: (project.hasProperty("ROX_API_KEY") ? project.property("ROX_API_KEY") : "dev-placeholder"))
+    ]
     }
 
     sourceSets {
@@ -51,7 +52,11 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+                  if (!System.getenv("ROX_API_KEY") && !project.hasProperty("ROX_API_KEY")) {
+        throw new GradleException("ROX_API_KEY manquante pour le build release")
+      }
         }
+
     }
 
     lintOptions {
@@ -67,5 +72,5 @@ android {
 
 dependencies {
     implementation 'de.cketti.library.changelog:ckchangelog-legacy-dialog:2.0.0-SNAPSHOT'
-    compile group: 'io.rollout.rox', name: 'rox-android', version: '6.0.0'
+    implementation 'io.rollout.rox:rox-android:6.0.0'
 }
