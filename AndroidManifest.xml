@@ -6,7 +6,7 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
-    <!-- ⚠️ Pas de commentaires ici dans la balise <application> -->
+    
     <application
         android:name=".App"
         android:allowBackup="true"
