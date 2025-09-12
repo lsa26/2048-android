@@ -5,12 +5,14 @@ import android.app.Activity;
 import android.content.SharedPreferences.Editor;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
+import android.graphics.Color;
 import android.os.Bundle;
 import android.preference.PreferenceManager;
 import android.provider.Settings;
 import android.provider.Settings.SettingNotFoundException;
 import android.util.Log;
 import android.view.MotionEvent;
+import android.view.View;
 import android.view.Window;
 import android.view.WindowManager.LayoutParams;
 import android.webkit.WebSettings;
@@ -69,6 +71,9 @@ public class MainActivity extends Activity {
 
         setContentView(R.layout.activity_main);
 
+        // ⬇️ Applique la couleur d’arrière-plan selon le flag Unify
+        applyBackground(App.flags.backgroundColor.getValue());
+
         DialogChangeLog changeLog = DialogChangeLog.newInstance(this);
         if (changeLog.isFirstRun()) {
             changeLog.getLogDialog().show();
@@ -117,6 +122,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        // Re-applique la couleur si le flag a changé
+        applyBackground(App.flags.backgroundColor.getValue());
         mWebView.loadUrl("file:///android_asset/2048/index.html?lang=" + Locale.getDefault().getLanguage());
     }
 
@@ -126,43 +133,32 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Saves the full screen setting in the SharedPreferences
-     *
-     * @param isFullScreen boolean value
+     * Sauve le mode plein écran dans les SharedPreferences
      */
-
     private void saveFullScreen(boolean isFullScreen) {
-        // save in preferences
         Editor editor = PreferenceManager.getDefaultSharedPreferences(this).edit();
         editor.putBoolean(IS_FULLSCREEN_PREF, isFullScreen);
         editor.apply();
     }
 
     private boolean isFullScreen() {
-        return PreferenceManager.getDefaultSharedPreferences(this).getBoolean(IS_FULLSCREEN_PREF,
-                true);
+        return PreferenceManager.getDefaultSharedPreferences(this).getBoolean(IS_FULLSCREEN_PREF, true);
     }
 
     /**
-     * Toggles the activity's fullscreen mode by setting the corresponding window flag
-     *
-     * @param isFullScreen boolean value
+     * Active/désactive le plein écran via le flag de fenêtre
      */
     private void applyFullScreen(boolean isFullScreen) {
         if (isFullScreen) {
             getWindow().clearFlags(LayoutParams.FLAG_FULLSCREEN);
         } else {
-            getWindow().setFlags(LayoutParams.FLAG_FULLSCREEN,
-                    LayoutParams.FLAG_FULLSCREEN);
+            getWindow().setFlags(LayoutParams.FLAG_FULLSCREEN, LayoutParams.FLAG_FULLSCREEN);
         }
     }
 
     /**
-     * Prevents app from closing on pressing back button accidentally.
-     * mBackPressThreshold specifies the maximum delay (ms) between two consecutive backpress to
-     * quit the app.
+     * Empêche la fermeture accidentelle via back
      */
-
     @Override
     public void onBackPressed() {
         long currentTime = System.currentTimeMillis();
@@ -173,5 +169,20 @@ public class MainActivity extends Activity {
             pressBackToast.cancel();
             super.onBackPressed();
         }
+    }
+
+    /**
+     * Applique la couleur d’arrière-plan selon la valeur du flag
+     */
+    private void applyBackground(String value) {
+        int color;
+        if ("Blue".equals(value))       color = Color.parseColor("#0D47A1");
+        else if ("Green".equals(value)) color = Color.parseColor("#1B5E20");
+        else if ("Yellow".equals(value))color = Color.parseColor("#FBC02D");
+        else if ("Dark".equals(value))  color = Color.parseColor("#121212");
+        else                            color = Color.WHITE;
+
+        View root = getWindow().getDecorView();
+        root.setBackgroundColor(color);
     }
 }
