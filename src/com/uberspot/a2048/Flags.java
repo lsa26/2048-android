@@ -12,3 +12,10 @@ public class Flags implements RoxContainer {
     // Multivarié: couleur du titre, valeur par défaut "White"
     public RoxString titleColors = new RoxString("White", new String[] {"White", "Blue", "Green", "Yellow"});
 }
+
+
+public RoxString backgroundColor = new RoxString(
+    "White",
+    new String[] {"White", "Blue", "Green", "Yellow", "Dark"}
+);
+
