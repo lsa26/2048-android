@@ -190,7 +190,8 @@ jobs:
             exit 1
           fi
           
-      - name: Register APK as Component Build Artifact
+      - name: Prepare APK artifact data
+        id: prepare-artifact
         uses: docker://alpine:latest
         env:
           APK_URL: ${{ needs.trigger-jenkins-build.outputs.APK_URL }}
@@ -253,40 +254,31 @@ jobs:
         with:
           name: ${{ steps.prepare-artifact.outputs.CLEAN_APK_NAME }}
           url: ${{ steps.prepare-artifact.outputs.CLEAN_APK_URL }}
-          type: android_apk
           version: build-${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
-          description: "Android APK from Jenkins build #${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}, scanned with Trivy, ${{ steps.prepare-artifact.outputs.VULNERABILITIES_CRITICAL }} critical vulnerabilities"
-          metadata: |
-            {
-              "build_system": "jenkins_macos_android",
-              "jenkins_build_number": "${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}",
-              "cloudbees_run_id": "${{ cloudbees.run_id }}",
-              "file_size_bytes": ${{ steps.prepare-artifact.outputs.FILE_SIZE }},
-              "security_analysis": {
-                "scan_tool": "trivy", 
-                "scan_status": "completed",
-                "scan_date": "$(date -Iseconds)",
-                "vulnerabilities": {
-                  "critical": ${{ steps.prepare-artifact.outputs.VULNERABILITIES_CRITICAL }},
-                  "high": ${{ steps.prepare-artifact.outputs.VULNERABILITIES_HIGH }},
-                  "medium": ${{ steps.prepare-artifact.outputs.VULNERABILITIES_MEDIUM }},
-                  "low": ${{ steps.prepare-artifact.outputs.VULNERABILITIES_LOW }},
-                  "total": $((${{ steps.prepare-artifact.outputs.VULNERABILITIES_CRITICAL }} + ${{ steps.prepare-artifact.outputs.VULNERABILITIES_HIGH }} + ${{ steps.prepare-artifact.outputs.VULNERABILITIES_MEDIUM }} + ${{ steps.prepare-artifact.outputs.VULNERABILITIES_LOW }}))
-                },
-                "risk_level": "${{ steps.prepare-artifact.outputs.RISK_LEVEL }}"
-              },
-              "source_info": {
-                "repository": "${{ cloudbees.scm.repositoryUrl }}",
-                "branch": "${{ cloudbees.scm.branch }}",
-                "commit_sha": "${{ cloudbees.scm.sha }}"
-              },
-              "artifact_info": {
-                "platform": "android",
-                "format": "apk",
-                "build_type": "debug"
-              }
-            }
-          tags: android,apk,jenkins-build,trivy-scanned,mobile,build-${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
+          commit: ${{ cloudbees.scm.sha }}
+          repository-url: ${{ cloudbees.scm.repositoryUrl }}
+          labels: |
+            android=true
+            apk=true
+            jenkins-build=true
+            trivy-scanned=true
+            mobile=true
+            build-number=${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
+            security-status=scanned
+            risk-level=${{ steps.prepare-artifact.outputs.RISK_LEVEL }}
+            file-size=${{ steps.prepare-artifact.outputs.FILE_SIZE }}
+            vulnerabilities-critical=${{ steps.prepare-artifact.outputs.VULNERABILITIES_CRITICAL }}
+            vulnerabilities-high=${{ steps.prepare-artifact.outputs.VULNERABILITIES_HIGH }}
+            vulnerabilities-medium=${{ steps.prepare-artifact.outputs.VULNERABILITIES_MEDIUM }}
+            vulnerabilities-low=${{ steps.prepare-artifact.outputs.VULNERABILITIES_LOW }}
+
+      - name: Upload APK Metadata as Workflow Artifact
+        uses: cloudbees-io/upload-artifact@v1
+        with:
+          name: apk-security-report-${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
+          path: |
+            trivy-results.json
+            ${{ needs.trigger-jenkins-build.outputs.APK_NAME }}
           
       - name: Publish Security Report
         uses: cloudbees-io/publish-evidence-item@v1
@@ -298,26 +290,45 @@ jobs:
             - **APK File**: `${{ needs.trigger-jenkins-build.outputs.APK_NAME }}`
             - **Jenkins Build**: #${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
             - **Download URL**: `${{ needs.trigger-jenkins-build.outputs.APK_URL }}`
+            - **File Size**: ${{ steps.prepare-artifact.outputs.FILE_SIZE }} bytes
             - **Status**: Analysis Completed
+            
+            ### Security Scan Results
+            | Severity | Count |
+            |----------|-------|
+            | Critical | ${{ steps.prepare-artifact.outputs.VULNERABILITIES_CRITICAL }} |
+            | High | ${{ steps.prepare-artifact.outputs.VULNERABILITIES_HIGH }} |
+            | Medium | ${{ steps.prepare-artifact.outputs.VULNERABILITIES_MEDIUM }} |
+            | Low | ${{ steps.prepare-artifact.outputs.VULNERABILITIES_LOW }} |
+            
+            **Risk Level**: ${{ steps.prepare-artifact.outputs.RISK_LEVEL }}
             
             ### Pipeline Flow
             GitHub Push → CloudBees Unify → Jenkins macOS → APK Build → bashupload.com → APK Download → Trivy Scan → Artifact Registration
             
-            ### Security Tools
-            - **Binary Analysis**: Trivy filesystem vulnerability scanning
-            - **Evidence Collection**: Automated compliance documentation
-            
             ### Artifact Registration
+            ✅ **APK registered as Component Build Artifact**
             - **Build Origin**: Jenkins macOS Android agent
-            - **Security Validation**: Trivy vulnerability assessment
-            - **Component Integration**: Registered in CloudBees Unify Artifacts tab
+            - **Security Validation**: Trivy vulnerability assessment completed
+            - **Component Integration**: Available in CloudBees Unify Artifacts tab
+            - **Traceability**: Full chain of custody maintained
+            
+            ### Download Instructions
+            ```bash
+            # Download APK directly
+            wget "$${{ needs.trigger-jenkins-build.outputs.APK_URL }}" -O "$${{ needs.trigger-jenkins-build.outputs.APK_NAME }}"
+            
+            # Install on Android device
+            adb install "${{ needs.trigger-jenkins-build.outputs.APK_NAME }}"
+            ```
             
             ### Next Steps
-            1. Review Security findings in Security tab
-            2. Prioritize Critical/High severity issues
-            3. Apply security patches
-            4. Re-scan after remediation
+            1. Check **Artifacts** tab in Component for registered APK
+            2. Review detailed Security findings in Security tab
+            3. Download security report from Workflow Artifacts
+            4. Prioritize Critical/High severity issues for remediation
             
             **Scan Completed**: $(date)
             **Repository**: ${{ cloudbees.scm.repositoryUrl }}
+            **Commit**: ${{ cloudbees.scm.sha }}
           format: MARKDOWN
