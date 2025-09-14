@@ -41,6 +41,11 @@ public class MainActivity extends Activity {
     @SuppressLint({"SetJavaScriptEnabled", "ShowToast", "ClickableViewAccessibility"})
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+
+        // ✅ Active le debug WebView (laisse sans condition le temps des tests)
+        android.webkit.WebView.setWebContentsDebuggingEnabled(true);
+        Log.i(MAIN_ACTIVITY_TAG, "WebView debug ENABLED");
+        
         super.onCreate(savedInstanceState);
 
         // Don't show an action bar or title
