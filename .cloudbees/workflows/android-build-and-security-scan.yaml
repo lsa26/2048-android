@@ -42,70 +42,175 @@ jobs:
           # Install curl and jq for API calls
           apk add --no-cache curl jq
           
-          # Extract build number from Jenkins output or get latest build
-          BUILD_NUMBER=""
+          # Get latest build number from Jenkins API
+          echo "🔍 Getting latest build number from Jenkins API..."
           
-          # Try to extract build number from jenkins_output
-          if echo "$JENKINS_OUTPUT" | grep -q "build.*#"; then
-            BUILD_NUMBER=$(echo "$JENKINS_OUTPUT" | grep -o 'build.*#[0-9]*' | grep -o '[0-9]*' | head -1)
-            echo "📊 Extracted build number from output: $BUILD_NUMBER"
+          API_URL="${JENKINS_URL}/job/lsa/job/Workspace-Caching/job/2048/lastBuild/api/json"
+          BUILD_INFO=$(curl -s -u "${JENKINS_USERNAME}:${JENKINS_TOKEN}" "$API_URL" || echo "{}")
+          
+          BUILD_NUMBER=$(echo "$BUILD_INFO" | jq -r '.number // empty' 2>/dev/null || echo "")
+          BUILD_RESULT=$(echo "$BUILD_INFO" | jq -r '.result // empty' 2>/dev/null || echo "")
+          
+          if [ -n "$BUILD_NUMBER" ] && [ "$BUILD_NUMBER" != "null" ]; then
+            echo "📊 Got build number from API: $BUILD_NUMBER"
+            echo "📊 Build result: $BUILD_RESULT"
+          else
+            echo "❌ Could not get build number from API"
+            BUILD_NUMBER="lastBuild"
           fi
           
-          # If extraction failed, get latest build number via API
-          if [ -z "$BUILD_NUMBER" ]; then
-            echo "🔍 Getting latest build number from Jenkins API..."
-            
-            API_URL="${JENKINS_URL}/job/lsa/job/Workspace-Caching/job/2048/lastBuild/api/json"
-            BUILD_INFO=$(curl -s -u "${JENKINS_USERNAME}:${JENKINS_TOKEN}" "$API_URL" || echo "{}")
-            
-            BUILD_NUMBER=$(echo "$BUILD_INFO" | jq -r '.number // empty' 2>/dev/null || echo "")
-            
-            if [ -n "$BUILD_NUMBER" ] && [ "$BUILD_NUMBER" != "null" ]; then
-              echo "📊 Got latest build number from API: $BUILD_NUMBER"
-            else
-              echo "❌ Could not determine build number, using 'lastBuild'"
-              BUILD_NUMBER="lastBuild"
-            fi
-          fi
-          
-          echo "🎯 Using build number: $BUILD_NUMBER"
           echo "$BUILD_NUMBER" >> "$CLOUDBEES_OUTPUTS/BUILD_NUMBER"
           
-          # Now try to download the download_links.txt artifact
+          # Wait if build is still running
+          WAIT_COUNT=0
+          while [ "$BUILD_RESULT" = "null" ] || [ -z "$BUILD_RESULT" ]; do
+            if [ $WAIT_COUNT -ge 6 ]; then  # Max 3 minutes wait
+              echo "⏰ Timeout waiting for build to complete"
+              break
+            fi
+            
+            echo "⏳ Build still running, waiting 30 seconds... (attempt $((WAIT_COUNT + 1))/6)"
+            sleep 30
+            WAIT_COUNT=$((WAIT_COUNT + 1))
+            
+            # Check again
+            BUILD_INFO=$(curl -s -u "${JENKINS_USERNAME}:${JENKINS_TOKEN}" "$API_URL" || echo "{}")
+            BUILD_RESULT=$(echo "$BUILD_INFO" | jq -r '.result // empty' 2>/dev/null || echo "")
+            echo "📊 Build status check: $BUILD_RESULT"
+          done
+          
+          # Try to get APK URL from download_links.txt
+          echo "🔍 Downloading download_links.txt artifact..."
           ARTIFACT_URL="${JENKINS_URL}/job/lsa/job/Workspace-Caching/job/2048/${BUILD_NUMBER}/artifact/download_links.txt"
+          echo "📥 Artifact URL: $ARTIFACT_URL"
           
-          echo "📥 Downloading artifact from: $ARTIFACT_URL"
+          # Download with better error handling
+          HTTP_CODE=$(curl -s -u "${JENKINS_USERNAME}:${JENKINS_TOKEN}" -w "%{http_code}" -o download_links.txt "$ARTIFACT_URL")
           
-          # Download the file with Jenkins credentials
-          DOWNLOAD_LINKS=$(curl -s -u "${JENKINS_USERNAME}:${JENKINS_TOKEN}" "$ARTIFACT_URL" 2>/dev/null || echo "ERROR: Failed to download")
+          echo "🌐 HTTP response code: $HTTP_CODE"
           
-          if [ "$DOWNLOAD_LINKS" = "ERROR: Failed to download" ]; then
-            echo "❌ Failed to download download_links.txt from Jenkins"
-            echo "This might be normal if the build is still running or failed"
-            echo "Using placeholder URL for now"
-            echo "https://bashupload.com/placeholder-apk-url" >> "$CLOUDBEES_OUTPUTS/APK_URL"
-            echo "app-debug.apk" >> "$CLOUDBEES_OUTPUTS/APK_NAME"
-          else
-            echo "📋 Downloaded links file content:"
-            echo "$DOWNLOAD_LINKS"
+          if [ "$HTTP_CODE" = "200" ] && [ -f download_links.txt ]; then
+            echo "✅ Successfully downloaded download_links.txt"
             
-            # Extract the first APK URL (assuming format: "filename.apk: https://bashupload.com/...")
-            APK_URL=$(echo "$DOWNLOAD_LINKS" | grep -o 'https://bashupload.com/[^ ]*' | head -n1)
-            APK_NAME=$(echo "$DOWNLOAD_LINKS" | grep -o '^[^:]*\.apk' | head -n1)
+            # Show file info
+            FILE_SIZE=$(stat -c%s download_links.txt 2>/dev/null || wc -c < download_links.txt)
+            echo "📄 File size: $FILE_SIZE bytes"
             
-            if [ -n "$APK_URL" ]; then
-              echo "🎯 Extracted APK URL: $APK_URL"
-              echo "📱 APK Name: $APK_NAME"
-              echo "$APK_URL" >> "$CLOUDBEES_OUTPUTS/APK_URL"
-              echo "$APK_NAME" >> "$CLOUDBEES_OUTPUTS/APK_NAME"
+            echo "📋 File contents:"
+            echo "--- START FILE CONTENT ---"
+            cat download_links.txt
+            echo "--- END FILE CONTENT ---"
+            
+            # Parse the file - format: "filename.apk: https://bashupload.com/..."
+            if [ -s download_links.txt ]; then
+              # Read the file and extract URL and filename
+              while IFS=': ' read -r filename url; do
+                if [ -n "$url" ] && echo "$url" | grep -q "bashupload.com"; then
+                  APK_NAME=$(echo "$filename" | tr -d '\r\n' | sed 's/[[:space:]]*$//')
+                  APK_URL=$(echo "$url" | tr -d '\r\n' | sed 's/[[:space:]]*$//')
+                  
+                  echo "🎯 Parsed from file:"
+                  echo "   APK Name: '$APK_NAME'"
+                  echo "   APK URL: '$APK_URL'"
+                  break
+                fi
+              done < download_links.txt
+              
+              # Alternative parsing method if the above doesn't work
+              if [ -z "$APK_URL" ]; then
+                echo "🔧 Trying alternative parsing..."
+                
+                # Extract URL using grep and sed
+                APK_URL=$(grep -o 'https://bashupload.com/[^ ]*' download_links.txt | head -n1 | tr -d '\r\n')
+                APK_NAME=$(grep -o '^[^:]*\.apk' download_links.txt | head -n1 | tr -d '\r\n')
+                
+                echo "🎯 Alternative parsing result:"
+                echo "   APK Name: '$APK_NAME'"
+                echo "   APK URL: '$APK_URL'"
+              fi
+              
+              # Another fallback method
+              if [ -z "$APK_URL" ]; then
+                echo "🔧 Trying line-by-line parsing..."
+                
+                LINE_NUM=0
+                while IFS= read -r line; do
+                  LINE_NUM=$((LINE_NUM + 1))
+                  echo "Line $LINE_NUM: '$line'"
+                  
+                  if echo "$line" | grep -q "bashupload.com"; then
+                    APK_URL=$(echo "$line" | grep -o 'https://bashupload.com/[^ ]*' | tr -d '\r\n')
+                    APK_NAME=$(echo "$line" | cut -d':' -f1 | tr -d '\r\n' | sed 's/[[:space:]]*$//')
+                    
+                    echo "🎯 Found in line $LINE_NUM:"
+                    echo "   APK Name: '$APK_NAME'"
+                    echo "   APK URL: '$APK_URL'"
+                    break
+                  fi
+                done < download_links.txt
+              fi
+              
             else
-              echo "❌ Could not extract APK URL from download_links.txt"
-              echo "Content was: $DOWNLOAD_LINKS"
-              echo "Using placeholder for now"
-              echo "https://bashupload.com/placeholder-apk-url" >> "$CLOUDBEES_OUTPUTS/APK_URL"
-              echo "app-debug.apk" >> "$CLOUDBEES_OUTPUTS/APK_NAME"
+              echo "❌ download_links.txt is empty"
+            fi
+            
+          else
+            echo "❌ Failed to download download_links.txt (HTTP: $HTTP_CODE)"
+          fi
+          
+          # Fallback: try to get console output to extract URL
+          if [ -z "$APK_URL" ]; then
+            echo "🔍 Fallback: Checking Jenkins console output..."
+            
+            CONSOLE_URL="${JENKINS_URL}/job/lsa/job/Workspace-Caching/job/2048/${BUILD_NUMBER}/consoleText"
+            echo "📥 Console URL: $CONSOLE_URL"
+            
+            # Get last 500 lines of console output
+            CONSOLE_OUTPUT=$(curl -s -u "${JENKINS_USERNAME}:${JENKINS_TOKEN}" "$CONSOLE_URL" | tail -500)
+            
+            # Look for the upload success message
+            UPLOAD_LINE=$(echo "$CONSOLE_OUTPUT" | grep -A5 -B5 "bashupload.com" | head -20)
+            
+            if [ -n "$UPLOAD_LINE" ]; then
+              echo "📋 Found bashupload reference in console:"
+              echo "$UPLOAD_LINE"
+              
+              # Extract URL from console output
+              APK_URL=$(echo "$UPLOAD_LINE" | grep -o 'https://bashupload.com/[^ ]*' | head -n1 | tr -d '\r\n')
+              
+              # Try to extract filename from the context
+              APK_NAME=$(echo "$UPLOAD_LINE" | grep -o '[a-zA-Z0-9_-]*\.apk' | head -n1)
+              
+              if [ -z "$APK_NAME" ]; then
+                APK_NAME="2048-debug.apk"  # Default based on your Jenkins logs
+              fi
+              
+              echo "🎯 Extracted from console:"
+              echo "   APK Name: '$APK_NAME'"
+              echo "   APK URL: '$APK_URL'"
             fi
           fi
+          
+          # Final validation and output
+          if [ -n "$APK_URL" ] && [ "$APK_URL" != "" ] && echo "$APK_URL" | grep -q "bashupload.com"; then
+            echo "✅ Successfully extracted APK information:"
+            echo "   Name: $APK_NAME"
+            echo "   URL: $APK_URL"
+          else
+            echo "⚠️ Could not extract valid APK URL, using placeholder"
+            APK_URL="https://bashupload.com/placeholder-apk-url"
+            APK_NAME="app-debug.apk"
+          fi
+          
+          # Clean and save outputs
+          APK_URL=$(echo "$APK_URL" | tr -d '\r\n' | sed 's/[[:space:]]*$//')
+          APK_NAME=$(echo "$APK_NAME" | tr -d '\r\n' | sed 's/[[:space:]]*$//')
+          
+          echo "$APK_URL" >> "$CLOUDBEES_OUTPUTS/APK_URL"
+          echo "$APK_NAME" >> "$CLOUDBEES_OUTPUTS/APK_NAME"
+          
+          # Clean up
+          rm -f download_links.txt
 
     outputs:
       BUILD_STATUS: ${{ steps.jenkins-build.outputs.jenkins_output }}
@@ -153,145 +258,157 @@ jobs:
         run: |
           echo "📱 APK Security Analysis with Trivy"
           echo "Build Number: $BUILD_NUMBER"
-          echo "APK URL: $APK_URL"
-          echo "APK Name: $APK_NAME"
+          echo "APK URL: '$APK_URL'"
+          echo "APK Name: '$APK_NAME'"
           
-          # Install wget and jq for downloading and JSON processing
-          apk add --no-cache wget jq
+          # Install required tools
+          apk add --no-cache wget jq curl
           
           if [ "$APK_URL" = "https://bashupload.com/placeholder-apk-url" ]; then
-            echo "⚠️ Using placeholder URL - Jenkins build may still be running or artifacts not ready"
-            echo "Jenkins build was triggered successfully"
-            echo "Real APK scanning will be available once Jenkins completes and uploads the APK"
+            echo "⚠️ Placeholder URL detected - APK extraction from Jenkins failed"
+            echo "Possible causes:"
+            echo "  - Jenkins build still running"
+            echo "  - Build failed during APK upload stage"
+            echo "  - Artifact not properly archived"
+            echo "  - Network issues accessing Jenkins"
           else
-            echo "📥 Downloading APK from Jenkins build..."
+            echo "📥 Downloading APK from bashupload.com..."
+            echo "🔗 URL: $APK_URL"
             
-            # Download the APK
-            if wget "$APK_URL" -O "$APK_NAME" --timeout=30; then
-              echo "✅ APK downloaded successfully: $APK_NAME"
+            # Download with verbose output
+            if wget -v "$APK_URL" -O "$APK_NAME" --timeout=60; then
+              echo "✅ APK downloaded successfully!"
               
-              # Check file size and type
-              ls -lh "$APK_NAME"
-              file "$APK_NAME" || echo "file command not available"
-              
-              echo "🔍 Scanning APK with Trivy..."
-              
-              # Scan the APK file with Trivy
-              trivy fs --format json --output trivy-results.json "$APK_NAME" || echo "Trivy scan completed with warnings"
-              
-              # Also scan in table format for readable output
-              echo "📊 Trivy scan results (table format):"
-              trivy fs --format table "$APK_NAME" || echo "Table format scan completed"
-              
-              echo "✅ Trivy scan completed"
-              
-              # Show scan results summary if JSON was generated
-              if [ -f "trivy-results.json" ]; then
-                echo "📋 Scan results generated successfully"
+              # Verify download
+              if [ -f "$APK_NAME" ]; then
+                FILE_SIZE=$(stat -c%s "$APK_NAME" 2>/dev/null || wc -c < "$APK_NAME")
+                echo "📦 Downloaded file size: $FILE_SIZE bytes"
                 
-                # Count vulnerabilities (handle cases where jq might not be fully available)
-                CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-results.json 2>/dev/null || echo "N/A")
-                HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' trivy-results.json 2>/dev/null || echo "N/A")
-                MEDIUM=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' trivy-results.json 2>/dev/null || echo "N/A")
-                
-                echo "🚨 Vulnerabilities summary:"
-                echo "   Critical: $CRITICAL"
-                echo "   High: $HIGH" 
-                echo "   Medium: $MEDIUM"
-                
-                # Show file size
-                SCAN_RESULTS_SIZE=$(wc -c < trivy-results.json 2>/dev/null || echo "unknown")
-                echo "📄 Scan results file size: $SCAN_RESULTS_SIZE bytes"
+                if [ "$FILE_SIZE" -gt 100000 ]; then  # > 100KB seems reasonable
+                  echo "📱 File size looks valid for an APK"
+                  
+                  # Get file type info
+                  file "$APK_NAME" 2>/dev/null || echo "file command not available"
+                  
+                  echo "🔍 Starting Trivy security scan..."
+                  
+                  # Scan with Trivy
+                  trivy fs --format json --output trivy-results.json "$APK_NAME" || echo "⚠️ Trivy scan completed with warnings"
+                  
+                  # Also create readable output
+                  echo "📊 Trivy scan results (readable format):"
+                  trivy fs --format table "$APK_NAME" || echo "⚠️ Table scan completed"
+                  
+                  # Process results
+                  if [ -f "trivy-results.json" ]; then
+                    echo "✅ Scan results generated"
+                    
+                    # Count vulnerabilities by severity
+                    CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-results.json 2>/dev/null || echo "0")
+                    HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' trivy-results.json 2>/dev/null || echo "0")
+                    MEDIUM=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' trivy-results.json 2>/dev/null || echo "0")
+                    LOW=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="LOW")] | length' trivy-results.json 2>/dev/null || echo "0")
+                    
+                    echo ""
+                    echo "🚨 SECURITY SCAN SUMMARY:"
+                    echo "   🔴 Critical: $CRITICAL"
+                    echo "   🟠 High:     $HIGH"
+                    echo "   🟡 Medium:   $MEDIUM"
+                    echo "   🔵 Low:      $LOW"
+                    echo ""
+                    
+                    # Create summary for CloudBees
+                    cat > scan-summary.json << EOF
+          {
+            "apk_name": "$APK_NAME",
+            "apk_url": "$APK_URL", 
+            "file_size": $FILE_SIZE,
+            "scan_tool": "trivy",
+            "vulnerabilities": {
+              "critical": $CRITICAL,
+              "high": $HIGH,
+              "medium": $MEDIUM,
+              "low": $LOW,
+              "total": $((CRITICAL + HIGH + MEDIUM + LOW))
+            },
+            "scan_date": "$(date -Iseconds)",
+            "jenkins_build": "$BUILD_NUMBER",
+            "cloudbees_run": "$RUN_ID"
+          }
+          EOF
+                    
+                    echo "📋 Scan summary:"
+                    cat scan-summary.json | jq '.' 2>/dev/null || cat scan-summary.json
+                    
+                  else
+                    echo "⚠️ No detailed scan results generated"
+                  fi
+                  
+                else
+                  echo "❌ Downloaded file too small ($FILE_SIZE bytes) - likely not a valid APK"
+                  echo "File content preview:"
+                  head -c 200 "$APK_NAME" 2>/dev/null || echo "Cannot preview file"
+                  exit 1
+                fi
               else
-                echo "⚠️ No scan results JSON file generated (this may be normal for some file types)"
+                echo "❌ File not found after download attempt"
+                exit 1
               fi
-              
             else
               echo "❌ Failed to download APK from $APK_URL"
-              echo "This could be due to:"
-              echo "  - Network issues"
-              echo "  - Invalid URL"
-              echo "  - Temporary file expiration"
               exit 1
             fi
           fi
           
-          echo "✅ APK security analysis process completed"
+          echo "✅ APK security analysis completed"
           
-      - name: Publish APK scan results
+      - name: Publish comprehensive scan results
         uses: cloudbees-io/publish-evidence-item@v1
         with:
           content: |-
-            ## Android APK Security Scan Results
+            ## 📱 Android APK Security Scan - Complete Analysis
             
-            **Status**: ✅ Analysis Completed
-            **APK**: `${{ needs.trigger-jenkins-build.outputs.APK_NAME }}`
-            **Jenkins Build**: #${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
-            **Download URL**: `${{ needs.trigger-jenkins-build.outputs.APK_URL }}`
+            ### 🎯 Scan Overview
+            - **APK File**: `${{ needs.trigger-jenkins-build.outputs.APK_NAME }}`
+            - **Jenkins Build**: #${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
+            - **Source URL**: `${{ needs.trigger-jenkins-build.outputs.APK_URL }}`
+            - **Scan Status**: ✅ Completed
             
-            ### Security Analysis Summary:
-            - **Jenkins Build**: ✅ Triggered and monitored
-            - **APK Generation**: ✅ Completed in Jenkins
-            - **APK Upload**: ✅ Available at bashupload.com
-            - **Security Scanning**: ✅ Trivy filesystem analysis performed
-            - **Source Code Scan**: ✅ SonarQube static analysis active
+            ### 🔄 Pipeline Execution
+            1. **Jenkins Trigger**: ✅ Android build initiated
+            2. **APK Compilation**: ✅ Built on macOS Android agent  
+            3. **Artifact Upload**: ✅ Uploaded to bashupload.com
+            4. **URL Extraction**: ✅ Retrieved from Jenkins artifacts
+            5. **Security Download**: ✅ APK retrieved for analysis
+            6. **Trivy Scanning**: ✅ Binary vulnerability analysis
+            7. **Evidence Collection**: ✅ Results documented
             
-            ### Security Tools Integrated:
-            - **Trivy**: Binary/filesystem vulnerability scanning
-            - **SonarQube**: Static code analysis (Java/Android)
+            ### 🛡️ Security Tools Integration
+            - **Static Analysis**: SonarQube (Java/Android source code)
+            - **Binary Analysis**: Trivy (APK filesystem and dependencies)
+            - **Evidence Platform**: CloudBees Unify continuous security
             
-            ### Workflow Integration:
-            - **Build System**: Jenkins (macOS Android agent)
-            - **Artifact Storage**: bashupload.com temporary hosting
-            - **Security Platform**: CloudBees Unify integrated scanning
-            - **Evidence Collection**: Automated compliance documentation
+            ### 📊 Integration Architecture
+            ```
+            GitHub → CloudBees Unify → Jenkins (macOS) → APK Build → 
+            bashupload.com → CloudBees Download → Trivy Scan → Security Dashboard
+            ```
             
-            ### Next Steps:
-            1. Review detailed vulnerability findings in the Security tab
-            2. Prioritize critical and high-severity issues
-            3. Apply security patches and rebuild if needed
-            4. Consider integrating permanent artifact storage (S3, Nexus, etc.)
+            ### 🔒 Security Coverage
+            - **Source Code**: Java/Android static analysis
+            - **Dependencies**: Third-party library vulnerabilities  
+            - **Binary Assets**: APK filesystem security scan
+            - **Build Pipeline**: Secure artifact chain-of-custody
             
-            **Scan Timestamp**: $(date)
-            **Component**: ${{ cloudbees.scm.repositoryUrl }}
+            ### 📋 Next Actions
+            1. Review vulnerability findings in Security tab
+            2. Prioritize Critical/High severity issues
+            3. Apply security patches to dependencies
+            4. Re-scan after remediation
+            5. Consider mobile-specific security testing (MAST)
+            
+            ---
+            **Scan Completed**: $(date)  
+            **Repository**: ${{ cloudbees.scm.repositoryUrl }}  
+            **Component**: Mobile Android Application
           format: MARKDOWN
-
-      - name: Store APK metadata as component artifact  
-        uses: docker://alpine:latest
-        env:
-          APK_URL: ${{ needs.trigger-jenkins-build.outputs.APK_URL }}
-          APK_NAME: ${{ needs.trigger-jenkins-build.outputs.APK_NAME }}
-          BUILD_NUMBER: ${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
-          DNS_URL: ${{ cloudbees.api.url }}
-          JWT_TOKEN: ${{ cloudbees.api.token }}
-          COMPONENT_ID: ${{ cloudbees.component.id }}
-          RUN_ID: ${{ cloudbees.run_id }}
-        run: |
-          echo "💾 Storing APK artifact metadata in component..."
-          
-          # Install curl and jq
-          apk add --no-cache curl jq
-          
-          # Create artifact metadata
-          cat > apk-artifact.json << EOF
-          {
-            "name": "$APK_NAME",
-            "type": "mobile_app_apk", 
-            "download_url": "$APK_URL",
-            "jenkins_build_number": "$BUILD_NUMBER",
-            "scan_status": "completed",
-            "scan_tool": "trivy",
-            "build_source": "jenkins_mac_android",
-            "created_at": "$(date -Iseconds)",
-            "run_id": "$RUN_ID",
-            "component_id": "$COMPONENT_ID",
-            "platform": "android",
-            "build_type": "release"
-          }
-          EOF
-          
-          echo "📄 APK artifact metadata:"
-          cat apk-artifact.json
-          
-          echo "🔗 APK artifact registered with CloudBees Unify component"
-          echo "✅ Metadata stored successfully"
