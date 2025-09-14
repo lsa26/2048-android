@@ -108,11 +108,19 @@ jobs:
             APK_NAME="app-debug.apk"
           fi
           
-          APK_URL=$(echo "$APK_URL" | tr -d '\r\n' | sed 's/[[:space:]]*$//')
-          APK_NAME=$(echo "$APK_NAME" | tr -d '\r\n' | sed 's/[[:space:]]*$//')
+          # Clean all outputs thoroughly
+          APK_URL_FINAL=$(echo "$APK_URL" | tr -d '\r\n\t' | sed 's/[[:space:]]*$//' | sed 's/^[[:space:]]*//')
+          APK_NAME_FINAL=$(echo "$APK_NAME" | tr -d '\r\n\t' | sed 's/[[:space:]]*$//' | sed 's/^[[:space:]]*//')
+          BUILD_NUMBER_FINAL=$(echo "$BUILD_NUMBER" | tr -d '\r\n\t' | sed 's/[[:space:]]*$//' | sed 's/^[[:space:]]*//')
           
-          echo "$APK_URL" >> "$CLOUDBEES_OUTPUTS/APK_URL"
-          echo "$APK_NAME" >> "$CLOUDBEES_OUTPUTS/APK_NAME"
+          echo "Final cleaned values:"
+          echo "APK_URL: '$APK_URL_FINAL'"
+          echo "APK_NAME: '$APK_NAME_FINAL'"
+          echo "BUILD_NUMBER: '$BUILD_NUMBER_FINAL'"
+          
+          printf "%s" "$APK_URL_FINAL" > "$CLOUDBEES_OUTPUTS/APK_URL"
+          printf "%s" "$APK_NAME_FINAL" > "$CLOUDBEES_OUTPUTS/APK_NAME"
+          printf "%s" "$BUILD_NUMBER_FINAL" > "$CLOUDBEES_OUTPUTS/BUILD_NUMBER"
           
           rm -f download_links.txt
 
@@ -138,8 +146,8 @@ jobs:
           
           apk add --no-cache wget jq curl
           
-          APK_URL_CLEAN=$(echo "$APK_URL" | tr -d '\r\n' | sed 's/[[:space:]]*$//')
-          APK_NAME_CLEAN=$(echo "$APK_NAME" | tr -d '\r\n' | sed 's/[[:space:]]*$//')
+          APK_URL_CLEAN=$(echo "$APK_URL" | tr -d '\r\n\t' | sed 's/[[:space:]]*$//' | sed 's/^[[:space:]]*//')
+          APK_NAME_CLEAN=$(echo "$APK_NAME" | tr -d '\r\n\t' | sed 's/[[:space:]]*$//' | sed 's/^[[:space:]]*//')
           
           if [ "$APK_URL_CLEAN" = "https://bashupload.com/placeholder-apk-url" ]; then
             echo "Placeholder URL detected - APK extraction failed"
@@ -190,12 +198,37 @@ jobs:
             exit 1
           fi
 
+      - name: Clean Variables for Artifact Registration
+        id: clean-vars
+        uses: docker://alpine:latest
+        env:
+          RAW_APK_NAME: ${{ needs.trigger-jenkins-build.outputs.APK_NAME }}
+          RAW_APK_URL: ${{ needs.trigger-jenkins-build.outputs.APK_URL }}
+          RAW_BUILD_NUMBER: ${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
+        run: |
+          echo "Cleaning variables for artifact registration"
+          
+          # Clean all variables thoroughly
+          CLEAN_APK_NAME=$(printf "%s" "$RAW_APK_NAME" | tr -d '\r\n\t' | sed 's/[[:space:]]*$//' | sed 's/^[[:space:]]*//')
+          CLEAN_APK_URL=$(printf "%s" "$RAW_APK_URL" | tr -d '\r\n\t' | sed 's/[[:space:]]*$//' | sed 's/^[[:space:]]*//')
+          CLEAN_BUILD_NUMBER=$(printf "%s" "$RAW_BUILD_NUMBER" | tr -d '\r\n\t' | sed 's/[[:space:]]*$//' | sed 's/^[[:space:]]*//')
+          
+          echo "Cleaned values:"
+          echo "Name: '$CLEAN_APK_NAME'"
+          echo "URL: '$CLEAN_APK_URL'"
+          echo "Build: '$CLEAN_BUILD_NUMBER'"
+          
+          # Use printf instead of echo to avoid newlines
+          printf "%s" "$CLEAN_APK_NAME" > "$CLOUDBEES_OUTPUTS/CLEAN_APK_NAME"
+          printf "%s" "$CLEAN_APK_URL" > "$CLOUDBEES_OUTPUTS/CLEAN_APK_URL"
+          printf "%s" "$CLEAN_BUILD_NUMBER" > "$CLOUDBEES_OUTPUTS/CLEAN_BUILD_NUMBER"
+
       - name: Register APK Build Artifact in Component
         uses: cloudbees-io/register-build-artifact@v1
         with:
-          name: ${{ needs.trigger-jenkins-build.outputs.APK_NAME }}
-          url: ${{ needs.trigger-jenkins-build.outputs.APK_URL }}
-          version: build-${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
+          name: ${{ steps.clean-vars.outputs.CLEAN_APK_NAME }}
+          url: ${{ steps.clean-vars.outputs.CLEAN_APK_URL }}
+          version: ${{ steps.clean-vars.outputs.CLEAN_BUILD_NUMBER }}
           
       - name: Publish Security Report
         uses: cloudbees-io/publish-evidence-item@v1
@@ -204,9 +237,9 @@ jobs:
             ## Android APK Security Analysis Report
             
             ### Analysis Summary
-            - **APK File**: `${{ needs.trigger-jenkins-build.outputs.APK_NAME }}`
-            - **Jenkins Build**: #${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
-            - **Download URL**: `${{ needs.trigger-jenkins-build.outputs.APK_URL }}`
+            - **APK File**: `${{ steps.clean-vars.outputs.CLEAN_APK_NAME }}`
+            - **Jenkins Build**: #${{ steps.clean-vars.outputs.CLEAN_BUILD_NUMBER }}
+            - **Download URL**: `${{ steps.clean-vars.outputs.CLEAN_APK_URL }}`
             - **Status**: Analysis Completed
             
             ### Security Scan Results
@@ -225,10 +258,10 @@ jobs:
             ### Download Instructions
             ```bash
             # Download APK directly
-            wget "$${{ needs.trigger-jenkins-build.outputs.APK_URL }}" -O "$${{ needs.trigger-jenkins-build.outputs.APK_NAME }}"
+            wget "$${{ steps.clean-vars.outputs.CLEAN_APK_URL }}" -O "$${{ steps.clean-vars.outputs.CLEAN_APK_NAME }}"
             
             # Install on Android device
-            adb install "${{ needs.trigger-jenkins-build.outputs.APK_NAME }}"
+            adb install "${{ steps.clean-vars.outputs.CLEAN_APK_NAME }}"
             ```
             
             ### Next Steps
