@@ -24,11 +24,7 @@ jobs:
           username: ${{ secrets.JENKINS_USERNAME }}
           token: ${{ secrets.JENKINS_TOKEN }}
           job-name: lsa/Workspace-Caching/2048
-          parameters: |
-            {
-              "CLEAN_BUILD": "false",
-              "BUILD_TYPE": "release"
-            }
+          parameters: '{"CLEAN_BUILD": "false", "BUILD_TYPE": "release"}'
           
       - name: Extract APK download URL from Jenkins output
         id: extract-apk-url
