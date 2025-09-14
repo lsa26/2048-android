@@ -216,20 +216,7 @@ jobs:
           name: ${{ steps.scan-apk.outputs.CLEAN_APK_NAME }}
           url: ${{ steps.scan-apk.outputs.CLEAN_APK_URL }}
           version: build-${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
-          labels: |
-            android=true
-            apk=true
-            jenkins-build=true
-            trivy-scanned=true
-            mobile=true
-            build-number=${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
-            security-status=scanned
-            risk-level=${{ steps.scan-apk.outputs.RISK_LEVEL }}
-            file-size-bytes=${{ steps.scan-apk.outputs.FILE_SIZE }}
-            vulnerabilities-critical=${{ steps.scan-apk.outputs.VULNERABILITIES_CRITICAL }}
-            vulnerabilities-high=${{ steps.scan-apk.outputs.VULNERABILITIES_HIGH }}
-            vulnerabilities-medium=${{ steps.scan-apk.outputs.VULNERABILITIES_MEDIUM }}
-            vulnerabilities-low=${{ steps.scan-apk.outputs.VULNERABILITIES_LOW }}
+          labels: "android=true,apk=true,jenkins-build=true,trivy-scanned=true,mobile=true,build-number=${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }},security-status=scanned,risk-level=${{ steps.scan-apk.outputs.RISK_LEVEL }},file-size-bytes=${{ steps.scan-apk.outputs.FILE_SIZE }},vulnerabilities-critical=${{ steps.scan-apk.outputs.VULNERABILITIES_CRITICAL }},vulnerabilities-high=${{ steps.scan-apk.outputs.VULNERABILITIES_HIGH }},vulnerabilities-medium=${{ steps.scan-apk.outputs.VULNERABILITIES_MEDIUM }},vulnerabilities-low=${{ steps.scan-apk.outputs.VULNERABILITIES_LOW }}"
           
       - name: Publish Security Report
         uses: cloudbees-io/publish-evidence-item@v1
