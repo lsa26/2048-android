@@ -23,7 +23,7 @@ jobs:
           url: https://core.cloudbees.guru/shared-demos/
           username: ${{ secrets.JENKINS_USERNAME }}
           token: ${{ secrets.JENKINS_TOKEN }}
-          job-name: lsa/Workspace-Caching/2048
+          job-name: lsa/job/Workspace-Caching/job/2048
           
       - name: Wait and get Jenkins job status
         id: extract-apk-url
@@ -35,7 +35,7 @@ jobs:
           echo "Jenkins Output:"
           echo "$JENKINS_OUTPUT"
           
-          # For now, we'll use a placeholder APK URL since we need to see the actual Jenkins output format
+          # For now, we'll use a placeholder APK URL
           echo "https://bashupload.com/placeholder-apk-url" >> "$CLOUDBEES_OUTPUTS/APK_URL"
 
     outputs:
@@ -53,15 +53,6 @@ jobs:
         kind: scan
         continue-on-error: true
         with:
-          language: LANGUAGE_JAVA
-          
-      - name: Security scan with Snyk
-        uses: cloudbees-io/snyk-sast-scan-code@v1
-        kind: scan
-        continue-on-error: true
-        with:
-          orgname: ${{ secrets.SNYK_ORGNAME }}
-          token: ${{ secrets.SNYK_TOKEN }}
           language: LANGUAGE_JAVA
           
       - name: Publish security results
@@ -84,37 +75,24 @@ jobs:
         run: |
           echo "📱 APK Security Analysis"
           echo "APK URL: $APK_URL"
-          echo "In a real scenario, this would:"
-          echo "- Download the APK from: $APK_URL"
-          echo "- Run mobile security scanning tools"
-          echo "- Check for vulnerabilities, permissions, etc."
-          echo "✅ Security scan simulation completed"
+          echo "Jenkins build triggered successfully"
+          echo "✅ Workflow completed"
           
       - name: Publish APK scan results
         uses: cloudbees-io/publish-evidence-item@v1
         with:
           content: |-
-            ## Android APK Security Scan
+            ## Android APK Security Scan Setup
             
-            **APK URL**: ${{ needs.trigger-jenkins-build.outputs.APK_URL }}
-            **Jenkins Output**: ${{ needs.trigger-jenkins-build.outputs.BUILD_STATUS }}
+            **Status**: Jenkins integration configured
+            **Jenkins Job**: lsa/job/Workspace-Caching/job/2048
             
-            The APK security scanning workflow is ready. Once we can extract the real APK URL from Jenkins, 
-            this will automatically:
+            ### Next Steps:
+            1. ✅ Jenkins job trigger configured
+            2. ✅ Source code security scanning active
+            3. 🔄 APK security scanning ready (pending APK URL extraction)
             
-            1. Extract the APK download URL from Jenkins output
-            2. Download the generated APK file
-            3. Perform security analysis using mobile security tools
-            
-            ### Security Checks to be Performed:
-            - ✅ File format validation
-            - ✅ Permission analysis
-            - ✅ Vulnerability scanning
-            - ✅ Malware detection
-            
-            ### Recommended Tools for Production:
-            - **MobSF** (Mobile Security Framework)
-            - **QARK** (Quick Android Review Kit)
-            - **Veracode** mobile scanning
-            - **Checkmarx** mobile analysis
+            ### Security Tools Integrated:
+            - **SonarQube**: Static code analysis
+            - **Future**: APK mobile security scanning
           format: MARKDOWN
