@@ -125,6 +125,7 @@ jobs:
     needs: trigger-jenkins-build
     steps:
       - name: Download and scan APK with Trivy
+        id: scan-apk
         uses: docker://aquasec/trivy:latest
         env:
           APK_URL: ${{ needs.trigger-jenkins-build.outputs.APK_URL }}
@@ -176,6 +177,25 @@ jobs:
                   echo "  Medium: $MEDIUM"
                   echo "  Low: $LOW"
                   echo "  Total: $TOTAL"
+                  
+                  # Export values for next step
+                  echo "$APK_NAME_CLEAN" >> "$CLOUDBEES_OUTPUTS/CLEAN_APK_NAME"
+                  echo "$APK_URL_CLEAN" >> "$CLOUDBEES_OUTPUTS/CLEAN_APK_URL"
+                  echo "$FILE_SIZE" >> "$CLOUDBEES_OUTPUTS/FILE_SIZE"
+                  echo "$CRITICAL" >> "$CLOUDBEES_OUTPUTS/VULNERABILITIES_CRITICAL"
+                  echo "$HIGH" >> "$CLOUDBEES_OUTPUTS/VULNERABILITIES_HIGH"
+                  echo "$MEDIUM" >> "$CLOUDBEES_OUTPUTS/VULNERABILITIES_MEDIUM"
+                  echo "$LOW" >> "$CLOUDBEES_OUTPUTS/VULNERABILITIES_LOW"
+                  
+                  RISK_LEVEL="LOW"
+                  if [ $CRITICAL -gt 0 ]; then
+                    RISK_LEVEL="CRITICAL"
+                  elif [ $HIGH -gt 0 ]; then
+                    RISK_LEVEL="HIGH"
+                  elif [ $MEDIUM -gt 0 ]; then
+                    RISK_LEVEL="MEDIUM"
+                  fi
+                  echo "$RISK_LEVEL" >> "$CLOUDBEES_OUTPUTS/RISK_LEVEL"
                 fi
               else
                 echo "File too small ($FILE_SIZE bytes) - not a valid APK"
@@ -189,74 +209,13 @@ jobs:
             echo "Invalid bashupload.com URL format"
             exit 1
           fi
-          
-      - name: Prepare APK artifact data
-        id: prepare-artifact
-        uses: docker://alpine:latest
-        env:
-          APK_URL: ${{ needs.trigger-jenkins-build.outputs.APK_URL }}
-          APK_NAME: ${{ needs.trigger-jenkins-build.outputs.APK_NAME }}
-          BUILD_NUMBER: ${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
-        run: |
-          echo "Preparing APK artifact registration"
-          
-          apk add --no-cache jq
-          
-          APK_URL_CLEAN=$(echo "$APK_URL" | tr -d '\r\n' | sed 's/[[:space:]]*$//')
-          APK_NAME_CLEAN=$(echo "$APK_NAME" | tr -d '\r\n' | sed 's/[[:space:]]*$//')
-          
-          if [ "$APK_URL_CLEAN" = "https://bashupload.com/placeholder-apk-url" ]; then
-            echo "Placeholder URL - skipping artifact registration"
-            exit 0
-          fi
-          
-          # Get file size and scan results
-          FILE_SIZE=0
-          if [ -f "$APK_NAME_CLEAN" ]; then
-            FILE_SIZE=$(stat -c%s "$APK_NAME_CLEAN" 2>/dev/null || wc -c < "$APK_NAME_CLEAN")
-          fi
-          
-          CRITICAL=0
-          HIGH=0
-          MEDIUM=0
-          LOW=0
-          
-          if [ -f "trivy-results.json" ]; then
-            CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-results.json 2>/dev/null || echo "0")
-            HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' trivy-results.json 2>/dev/null || echo "0")
-            MEDIUM=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' trivy-results.json 2>/dev/null || echo "0")
-            LOW=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="LOW")] | length' trivy-results.json 2>/dev/null || echo "0")
-          fi
-          
-          RISK_LEVEL="LOW"
-          if [ $CRITICAL -gt 0 ]; then
-            RISK_LEVEL="CRITICAL"
-          elif [ $HIGH -gt 0 ]; then
-            RISK_LEVEL="HIGH"
-          elif [ $MEDIUM -gt 0 ]; then
-            RISK_LEVEL="MEDIUM"
-          fi
-          
-          # Prepare values for the next step
-          echo "$APK_NAME_CLEAN" >> "$CLOUDBEES_OUTPUTS/CLEAN_APK_NAME"
-          echo "$APK_URL_CLEAN" >> "$CLOUDBEES_OUTPUTS/CLEAN_APK_URL"
-          echo "$FILE_SIZE" >> "$CLOUDBEES_OUTPUTS/FILE_SIZE"
-          echo "$CRITICAL" >> "$CLOUDBEES_OUTPUTS/VULNERABILITIES_CRITICAL"
-          echo "$HIGH" >> "$CLOUDBEES_OUTPUTS/VULNERABILITIES_HIGH"
-          echo "$MEDIUM" >> "$CLOUDBEES_OUTPUTS/VULNERABILITIES_MEDIUM"
-          echo "$LOW" >> "$CLOUDBEES_OUTPUTS/VULNERABILITIES_LOW"
-          echo "$RISK_LEVEL" >> "$CLOUDBEES_OUTPUTS/RISK_LEVEL"
-          
-          echo "APK artifact data prepared for registration"
 
       - name: Register APK Build Artifact in Component
         uses: cloudbees-io/register-build-artifact@v1
         with:
-          name: ${{ steps.prepare-artifact.outputs.CLEAN_APK_NAME }}
-          url: ${{ steps.prepare-artifact.outputs.CLEAN_APK_URL }}
+          name: ${{ steps.scan-apk.outputs.CLEAN_APK_NAME }}
+          url: ${{ steps.scan-apk.outputs.CLEAN_APK_URL }}
           version: build-${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
-          commit: ${{ cloudbees.scm.sha }}
-          repository-url: ${{ cloudbees.scm.repositoryUrl }}
           labels: |
             android=true
             apk=true
@@ -265,20 +224,12 @@ jobs:
             mobile=true
             build-number=${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
             security-status=scanned
-            risk-level=${{ steps.prepare-artifact.outputs.RISK_LEVEL }}
-            file-size=${{ steps.prepare-artifact.outputs.FILE_SIZE }}
-            vulnerabilities-critical=${{ steps.prepare-artifact.outputs.VULNERABILITIES_CRITICAL }}
-            vulnerabilities-high=${{ steps.prepare-artifact.outputs.VULNERABILITIES_HIGH }}
-            vulnerabilities-medium=${{ steps.prepare-artifact.outputs.VULNERABILITIES_MEDIUM }}
-            vulnerabilities-low=${{ steps.prepare-artifact.outputs.VULNERABILITIES_LOW }}
-
-      - name: Upload APK Metadata as Workflow Artifact
-        uses: cloudbees-io/upload-artifact@v1
-        with:
-          name: apk-security-report-${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
-          path: |
-            trivy-results.json
-            ${{ needs.trigger-jenkins-build.outputs.APK_NAME }}
+            risk-level=${{ steps.scan-apk.outputs.RISK_LEVEL }}
+            file-size-bytes=${{ steps.scan-apk.outputs.FILE_SIZE }}
+            vulnerabilities-critical=${{ steps.scan-apk.outputs.VULNERABILITIES_CRITICAL }}
+            vulnerabilities-high=${{ steps.scan-apk.outputs.VULNERABILITIES_HIGH }}
+            vulnerabilities-medium=${{ steps.scan-apk.outputs.VULNERABILITIES_MEDIUM }}
+            vulnerabilities-low=${{ steps.scan-apk.outputs.VULNERABILITIES_LOW }}
           
       - name: Publish Security Report
         uses: cloudbees-io/publish-evidence-item@v1
@@ -290,18 +241,18 @@ jobs:
             - **APK File**: `${{ needs.trigger-jenkins-build.outputs.APK_NAME }}`
             - **Jenkins Build**: #${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
             - **Download URL**: `${{ needs.trigger-jenkins-build.outputs.APK_URL }}`
-            - **File Size**: ${{ steps.prepare-artifact.outputs.FILE_SIZE }} bytes
+            - **File Size**: ${{ steps.scan-apk.outputs.FILE_SIZE }} bytes
             - **Status**: Analysis Completed
             
             ### Security Scan Results
             | Severity | Count |
             |----------|-------|
-            | Critical | ${{ steps.prepare-artifact.outputs.VULNERABILITIES_CRITICAL }} |
-            | High | ${{ steps.prepare-artifact.outputs.VULNERABILITIES_HIGH }} |
-            | Medium | ${{ steps.prepare-artifact.outputs.VULNERABILITIES_MEDIUM }} |
-            | Low | ${{ steps.prepare-artifact.outputs.VULNERABILITIES_LOW }} |
+            | Critical | ${{ steps.scan-apk.outputs.VULNERABILITIES_CRITICAL }} |
+            | High | ${{ steps.scan-apk.outputs.VULNERABILITIES_HIGH }} |
+            | Medium | ${{ steps.scan-apk.outputs.VULNERABILITIES_MEDIUM }} |
+            | Low | ${{ steps.scan-apk.outputs.VULNERABILITIES_LOW }} |
             
-            **Risk Level**: ${{ steps.prepare-artifact.outputs.RISK_LEVEL }}
+            **Risk Level**: ${{ steps.scan-apk.outputs.RISK_LEVEL }}
             
             ### Pipeline Flow
             GitHub Push → CloudBees Unify → Jenkins macOS → APK Build → bashupload.com → APK Download → Trivy Scan → Artifact Registration
@@ -322,13 +273,20 @@ jobs:
             adb install "${{ needs.trigger-jenkins-build.outputs.APK_NAME }}"
             ```
             
+            ### Artifact Labels Applied
+            - `android=true`
+            - `jenkins-build=true` 
+            - `trivy-scanned=true`
+            - `security-status=scanned`
+            - `risk-level=${{ steps.scan-apk.outputs.RISK_LEVEL }}`
+            - `build-number=${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}`
+            
             ### Next Steps
-            1. Check **Artifacts** tab in Component for registered APK
-            2. Review detailed Security findings in Security tab
-            3. Download security report from Workflow Artifacts
-            4. Prioritize Critical/High severity issues for remediation
+            1. **Check Artifacts tab** in Component for registered APK
+            2. **Review Security findings** in Security tab
+            3. **Prioritize remediation** for Critical/High severity issues
+            4. **Deploy with confidence** after security validation
             
             **Scan Completed**: $(date)
             **Repository**: ${{ cloudbees.scm.repositoryUrl }}
-            **Commit**: ${{ cloudbees.scm.sha }}
           format: MARKDOWN
