@@ -24,9 +24,9 @@ jobs:
           username: ${{ secrets.JENKINS_USERNAME }}
           token: ${{ secrets.JENKINS_TOKEN }}
           job-name: lsa/Workspace-Caching/2048
-          # Remove parameters temporarily to test basic functionality
           
       - name: Wait and get Jenkins job status
+        id: extract-apk-url
         uses: docker://alpine:latest
         env:
           JENKINS_OUTPUT: ${{ steps.jenkins-build.outputs.jenkins_output }}
@@ -79,10 +79,13 @@ jobs:
     steps:
       - name: Simulate APK security scan
         uses: docker://alpine:latest
+        env:
+          APK_URL: ${{ needs.trigger-jenkins-build.outputs.APK_URL }}
         run: |
-          echo "📱 APK Security Analysis Simulation"
+          echo "📱 APK Security Analysis"
+          echo "APK URL: $APK_URL"
           echo "In a real scenario, this would:"
-          echo "- Download the APK from Jenkins artifacts"
+          echo "- Download the APK from: $APK_URL"
           echo "- Run mobile security scanning tools"
           echo "- Check for vulnerabilities, permissions, etc."
           echo "✅ Security scan simulation completed"
@@ -93,12 +96,13 @@ jobs:
           content: |-
             ## Android APK Security Scan
             
-            **Status**: Simulation completed
+            **APK URL**: ${{ needs.trigger-jenkins-build.outputs.APK_URL }}
+            **Jenkins Output**: ${{ needs.trigger-jenkins-build.outputs.BUILD_STATUS }}
             
-            The APK security scanning workflow is ready. Once the Jenkins job parameters issue is resolved, 
+            The APK security scanning workflow is ready. Once we can extract the real APK URL from Jenkins, 
             this will automatically:
             
-            1. Extract the APK download URL from Jenkins logs
+            1. Extract the APK download URL from Jenkins output
             2. Download the generated APK file
             3. Perform security analysis using mobile security tools
             
