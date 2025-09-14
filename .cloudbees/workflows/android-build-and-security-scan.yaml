@@ -190,23 +190,16 @@ jobs:
             exit 1
           fi
           
-      - name: Register APK Artifact
+      - name: Register APK as Component Build Artifact
         uses: docker://alpine:latest
         env:
           APK_URL: ${{ needs.trigger-jenkins-build.outputs.APK_URL }}
           APK_NAME: ${{ needs.trigger-jenkins-build.outputs.APK_NAME }}
           BUILD_NUMBER: ${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
-          RUN_ID: ${{ cloudbees.run_id }}
-          DNS_URL: ${{ cloudbees.api.url }}
-          JWT_TOKEN: ${{ cloudbees.api.token }}
-          COMPONENT_ID: ${{ cloudbees.component.id }}
-          SCM_SHA: ${{ cloudbees.scm.sha }}
-          SCM_BRANCH: ${{ cloudbees.scm.branch }}
-          SCM_REPO: ${{ cloudbees.scm.repositoryUrl }}
         run: |
-          echo "Registering APK as CloudBees Unify Component Artifact"
+          echo "Preparing APK artifact registration"
           
-          apk add --no-cache curl jq
+          apk add --no-cache jq
           
           APK_URL_CLEAN=$(echo "$APK_URL" | tr -d '\r\n' | sed 's/[[:space:]]*$//')
           APK_NAME_CLEAN=$(echo "$APK_NAME" | tr -d '\r\n' | sed 's/[[:space:]]*$//')
@@ -226,14 +219,12 @@ jobs:
           HIGH=0
           MEDIUM=0
           LOW=0
-          SCAN_STATUS="pending"
           
           if [ -f "trivy-results.json" ]; then
             CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-results.json 2>/dev/null || echo "0")
             HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' trivy-results.json 2>/dev/null || echo "0")
             MEDIUM=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' trivy-results.json 2>/dev/null || echo "0")
             LOW=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="LOW")] | length' trivy-results.json 2>/dev/null || echo "0")
-            SCAN_STATUS="completed"
           fi
           
           RISK_LEVEL="LOW"
@@ -245,104 +236,57 @@ jobs:
             RISK_LEVEL="MEDIUM"
           fi
           
-          # Create artifact metadata
-          cat > artifact-metadata.json << EOF
-          {
-            "name": "$APK_NAME_CLEAN",
-            "type": "android_apk",
-            "version": "build-$BUILD_NUMBER",
-            "description": "Android APK built from Jenkins and scanned with Trivy",
-            "downloadUrl": "$APK_URL_CLEAN",
-            "metadata": {
-              "build": {
-                "jenkins_build_number": "$BUILD_NUMBER",
-                "cloudbees_run_id": "$RUN_ID",
-                "created_at": "$(date -Iseconds)"
-              },
-              "source": {
-                "repository": "$SCM_REPO",
-                "branch": "$SCM_BRANCH",
-                "commit_sha": "$SCM_SHA"
-              },
-              "file": {
-                "size_bytes": $FILE_SIZE,
-                "format": "apk",
-                "platform": "android"
-              },
-              "security": {
-                "scan_tool": "trivy",
-                "scan_status": "$SCAN_STATUS",
+          # Prepare values for the next step
+          echo "$APK_NAME_CLEAN" >> "$CLOUDBEES_OUTPUTS/CLEAN_APK_NAME"
+          echo "$APK_URL_CLEAN" >> "$CLOUDBEES_OUTPUTS/CLEAN_APK_URL"
+          echo "$FILE_SIZE" >> "$CLOUDBEES_OUTPUTS/FILE_SIZE"
+          echo "$CRITICAL" >> "$CLOUDBEES_OUTPUTS/VULNERABILITIES_CRITICAL"
+          echo "$HIGH" >> "$CLOUDBEES_OUTPUTS/VULNERABILITIES_HIGH"
+          echo "$MEDIUM" >> "$CLOUDBEES_OUTPUTS/VULNERABILITIES_MEDIUM"
+          echo "$LOW" >> "$CLOUDBEES_OUTPUTS/VULNERABILITIES_LOW"
+          echo "$RISK_LEVEL" >> "$CLOUDBEES_OUTPUTS/RISK_LEVEL"
+          
+          echo "APK artifact data prepared for registration"
+
+      - name: Register APK Build Artifact in Component
+        uses: cloudbees-io/register-build-artifact@v1
+        with:
+          name: ${{ steps.prepare-artifact.outputs.CLEAN_APK_NAME }}
+          url: ${{ steps.prepare-artifact.outputs.CLEAN_APK_URL }}
+          type: android_apk
+          version: build-${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
+          description: "Android APK from Jenkins build #${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}, scanned with Trivy, ${{ steps.prepare-artifact.outputs.VULNERABILITIES_CRITICAL }} critical vulnerabilities"
+          metadata: |
+            {
+              "build_system": "jenkins_macos_android",
+              "jenkins_build_number": "${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}",
+              "cloudbees_run_id": "${{ cloudbees.run_id }}",
+              "file_size_bytes": ${{ steps.prepare-artifact.outputs.FILE_SIZE }},
+              "security_analysis": {
+                "scan_tool": "trivy", 
+                "scan_status": "completed",
+                "scan_date": "$(date -Iseconds)",
                 "vulnerabilities": {
-                  "critical": $CRITICAL,
-                  "high": $HIGH,
-                  "medium": $MEDIUM,
-                  "low": $LOW,
-                  "total": $((CRITICAL + HIGH + MEDIUM + LOW))
+                  "critical": ${{ steps.prepare-artifact.outputs.VULNERABILITIES_CRITICAL }},
+                  "high": ${{ steps.prepare-artifact.outputs.VULNERABILITIES_HIGH }},
+                  "medium": ${{ steps.prepare-artifact.outputs.VULNERABILITIES_MEDIUM }},
+                  "low": ${{ steps.prepare-artifact.outputs.VULNERABILITIES_LOW }},
+                  "total": $((${{ steps.prepare-artifact.outputs.VULNERABILITIES_CRITICAL }} + ${{ steps.prepare-artifact.outputs.VULNERABILITIES_HIGH }} + ${{ steps.prepare-artifact.outputs.VULNERABILITIES_MEDIUM }} + ${{ steps.prepare-artifact.outputs.VULNERABILITIES_LOW }}))
                 },
-                "risk_level": "$RISK_LEVEL"
+                "risk_level": "${{ steps.prepare-artifact.outputs.RISK_LEVEL }}"
+              },
+              "source_info": {
+                "repository": "${{ cloudbees.scm.repositoryUrl }}",
+                "branch": "${{ cloudbees.scm.branch }}",
+                "commit_sha": "${{ cloudbees.scm.sha }}"
+              },
+              "artifact_info": {
+                "platform": "android",
+                "format": "apk",
+                "build_type": "debug"
               }
-            },
-            "tags": [
-              "android",
-              "apk",
-              "jenkins-build",
-              "trivy-scanned",
-              "build-$BUILD_NUMBER"
-            ]
-          }
-          EOF
-          
-          echo "Artifact metadata:"
-          cat artifact-metadata.json | jq '.' 2>/dev/null || cat artifact-metadata.json
-          
-          # Register with CloudBees API
-          ARTIFACT_API_URL="${DNS_URL}/api/v1/components/${COMPONENT_ID}/artifacts"
-          
-          RESPONSE=$(curl -s -w "\n%{http_code}" \
-            -X POST \
-            -H "Authorization: Bearer $JWT_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d @artifact-metadata.json \
-            "$ARTIFACT_API_URL" 2>/dev/null || echo -e "\nERROR")
-          
-          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-          RESPONSE_BODY=$(echo "$RESPONSE" | head -n -1)
-          
-          echo "API Response Code: $HTTP_CODE"
-          echo "API Response: $RESPONSE_BODY"
-          
-          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
-            echo "APK artifact successfully registered in CloudBees Unify"
-            echo "Check the Artifacts tab in your component"
-          else
-            echo "Failed to register artifact (HTTP: $HTTP_CODE)"
-            echo "Trying alternative endpoint..."
-            
-            ALT_API_URL="${DNS_URL}/api/v1/runs/${RUN_ID}/artifacts"
-            ALT_RESPONSE=$(curl -s -w "\n%{http_code}" \
-              -X POST \
-              -H "Authorization: Bearer $JWT_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d @artifact-metadata.json \
-              "$ALT_API_URL" 2>/dev/null || echo -e "\nERROR")
-            
-            ALT_HTTP_CODE=$(echo "$ALT_RESPONSE" | tail -n1)
-            
-            if [ "$ALT_HTTP_CODE" = "200" ] || [ "$ALT_HTTP_CODE" = "201" ]; then
-              echo "APK artifact registered via alternative endpoint"
-            else
-              echo "Both API endpoints failed"
-            fi
-          fi
-          
-          echo "ARTIFACT REGISTRATION SUMMARY"
-          echo "APK Name: $APK_NAME_CLEAN"
-          echo "Download URL: $APK_URL_CLEAN" 
-          echo "Jenkins Build: #$BUILD_NUMBER"
-          echo "File Size: $FILE_SIZE bytes"
-          echo "Security Status: $SCAN_STATUS"
-          echo "Risk Level: $RISK_LEVEL"
-          echo "Vulnerabilities: Critical:$CRITICAL High:$HIGH Medium:$MEDIUM Low:$LOW"
+            }
+          tags: android,apk,jenkins-build,trivy-scanned,mobile,build-${{ needs.trigger-jenkins-build.outputs.BUILD_NUMBER }}
           
       - name: Publish Security Report
         uses: cloudbees-io/publish-evidence-item@v1
