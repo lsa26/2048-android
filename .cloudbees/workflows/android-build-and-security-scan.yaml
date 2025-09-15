@@ -16,16 +16,8 @@ permissions:
 jobs:
   trigger-jenkins-build:
     steps:
-      - name: Trigger Jenkins Android Pipeline
+      - name: Trigger Jenkins Android Pipeline (Manual API)
         id: jenkins-build
-        uses: cloudbees-io/jenkins-run-job@v2
-        with:
-          url: https://core.cloudbees.guru/shared-demos/
-          username: ${{ secrets.JENKINS_USERNAME }}
-          token: ${{ secrets.JENKINS_TOKEN }}
-          job-name: lsa/job/Workspace-Caching/job/2048
-
-      - name: Verify Jenkins Job Status
         uses: docker://alpine:latest
         env:
           JENKINS_URL: https://core.cloudbees.guru/shared-demos/
@@ -35,26 +27,91 @@ jobs:
         run: |
           apk add --no-cache curl jq
           
-          # Attendre un peu pour s'assurer que Jenkins a fini de mettre à jour
-          sleep 10
+          echo "🚀 Triggering Jenkins job via direct API..."
           
-          # Vérifier le statut du dernier build
-          BUILD_INFO=$(curl -s -u "${JENKINS_USERNAME}:${JENKINS_TOKEN}" \
-            "${JENKINS_URL}/job/lsa/job/Workspace-Caching/job/2048/lastBuild/api/json")
+          # Get CSRF crumb
+          CRUMB=$(curl -s -u "${JENKINS_USERNAME}:${JENKINS_TOKEN}" \
+            "${JENKINS_URL}/crumbIssuer/api/json" | jq -r '.crumb')
+          echo "CSRF Crumb: $CRUMB"
           
-          BUILD_RESULT=$(echo "$BUILD_INFO" | jq -r '.result // empty')
-          BUILD_NUMBER=$(echo "$BUILD_INFO" | jq -r '.number // empty')
+          # Trigger the job
+          echo "Triggering job: ${JOB_NAME}"
+          TRIGGER_RESPONSE=$(curl -s -w "%{http_code}" \
+            -u "${JENKINS_USERNAME}:${JENKINS_TOKEN}" \
+            -H "Jenkins-Crumb: $CRUMB" \
+            -X POST "${JENKINS_URL}/job/lsa/job/Workspace-Caching/job/2048/build")
           
-          echo "Build #${BUILD_NUMBER} result: ${BUILD_RESULT}"
+          HTTP_CODE="${TRIGGER_RESPONSE: -3}"
+          echo "Trigger HTTP Code: $HTTP_CODE"
           
-          if [ "$BUILD_RESULT" = "SUCCESS" ]; then
-            echo "✅ Jenkins job completed successfully"
-            exit 0
-          else
-            echo "❌ Jenkins job failed with result: ${BUILD_RESULT}"
+          if [ "$HTTP_CODE" != "201" ]; then
+            echo "❌ Failed to trigger Jenkins job (HTTP: $HTTP_CODE)"
             exit 1
           fi
           
+          echo "✅ Jenkins job triggered successfully"
+          
+          # Wait a bit for the job to start
+          sleep 5
+          
+          # Get the build number of the job we just triggered
+          echo "Getting latest build number..."
+          for attempt in 1 2 3 4 5; do
+            BUILD_INFO=$(curl -s -u "${JENKINS_USERNAME}:${JENKINS_TOKEN}" \
+              "${JENKINS_URL}/job/lsa/job/Workspace-Caching/job/2048/lastBuild/api/json")
+            
+            BUILD_NUMBER=$(echo "$BUILD_INFO" | jq -r '.number // empty')
+            BUILD_RESULT=$(echo "$BUILD_INFO" | jq -r '.result // empty')
+            
+            if [ -n "$BUILD_NUMBER" ] && [ "$BUILD_NUMBER" != "null" ]; then
+              echo "Found build #$BUILD_NUMBER"
+              break
+            fi
+            
+            echo "Waiting for build to appear (attempt $attempt/5)..."
+            sleep 10
+          done
+          
+          if [ -z "$BUILD_NUMBER" ] || [ "$BUILD_NUMBER" = "null" ]; then
+            echo "❌ Could not find triggered build"
+            exit 1
+          fi
+          
+          # Wait for completion
+          echo "⏳ Waiting for build #$BUILD_NUMBER to complete..."
+          MAX_WAIT=30  # 30 attempts = ~15 minutes
+          WAIT_COUNT=0
+          
+          while [ "$BUILD_RESULT" = "null" ] || [ -z "$BUILD_RESULT" ]; do
+            if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
+              echo "❌ Timeout waiting for build completion"
+              exit 1
+            fi
+            
+            echo "Build #$BUILD_NUMBER still running... ($(($WAIT_COUNT + 1))/$MAX_WAIT)"
+            sleep 30
+            WAIT_COUNT=$((WAIT_COUNT + 1))
+            
+            # Check status again
+            BUILD_INFO=$(curl -s -u "${JENKINS_USERNAME}:${JENKINS_TOKEN}" \
+              "${JENKINS_URL}/job/lsa/job/Workspace-Caching/job/2048/${BUILD_NUMBER}/api/json")
+            
+            BUILD_RESULT=$(echo "$BUILD_INFO" | jq -r '.result // empty')
+          done
+          
+          echo "🏁 Build #$BUILD_NUMBER completed with result: $BUILD_RESULT"
+          
+          # Check final result
+          if [ "$BUILD_RESULT" = "SUCCESS" ]; then
+            echo "✅ Jenkins job completed successfully!"
+          else
+            echo "❌ Jenkins job failed with result: $BUILD_RESULT"
+            exit 1
+          fi
+          
+          # Save build number for next steps
+          printf "%s" "$BUILD_NUMBER" > "$CLOUDBEES_OUTPUTS/BUILD_NUMBER"
+
       - name: Extract APK URL from Jenkins with retry logic
         id: extract-apk-url
         uses: docker://alpine:latest
@@ -62,81 +119,12 @@ jobs:
           JENKINS_URL: https://core.cloudbees.guru/shared-demos/
           JENKINS_USERNAME: ${{ secrets.JENKINS_USERNAME }}
           JENKINS_TOKEN: ${{ secrets.JENKINS_TOKEN }}
+          BUILD_NUMBER: ${{ steps.jenkins-build.outputs.BUILD_NUMBER }}
         run: |
           echo "Processing Jenkins build output with enhanced retry logic"
+          echo "Using build number: $BUILD_NUMBER"
           
           apk add --no-cache curl jq
-          
-          # Function to get build info with retry
-          get_build_info() {
-            local max_attempts=5
-            local attempt=1
-            local delay=10
-            
-            while [ $attempt -le $max_attempts ]; do
-              echo "Attempt $attempt/$max_attempts: Getting build info..."
-              
-              API_URL="${JENKINS_URL}/job/lsa/job/Workspace-Caching/job/2048/lastBuild/api/json"
-              BUILD_INFO=$(curl -s -u "${JENKINS_USERNAME}:${JENKINS_TOKEN}" "$API_URL" 2>/dev/null || echo "{}")
-              
-              if [ "$BUILD_INFO" != "{}" ] && echo "$BUILD_INFO" | jq -e '.number' >/dev/null 2>&1; then
-                BUILD_NUMBER=$(echo "$BUILD_INFO" | jq -r '.number // empty')
-                BUILD_RESULT=$(echo "$BUILD_INFO" | jq -r '.result // empty')
-                
-                echo "Build Number: $BUILD_NUMBER"
-                echo "Build Result: $BUILD_RESULT"
-                
-                if [ -n "$BUILD_NUMBER" ] && [ "$BUILD_NUMBER" != "null" ] && [ "$BUILD_NUMBER" != "empty" ]; then
-                  return 0
-                fi
-              fi
-              
-              echo "Failed to get valid build info, waiting $delay seconds..."
-              sleep $delay
-              attempt=$((attempt + 1))
-              delay=$((delay * 2))  # Exponential backoff
-            done
-            
-            echo "Failed to get build info after $max_attempts attempts"
-            return 1
-          }
-          
-          # Get build info with retry
-          if ! get_build_info; then
-            echo "Could not get build info, exiting"
-            exit 1
-          fi
-          
-          echo "$BUILD_NUMBER" >> "$CLOUDBEES_OUTPUTS/BUILD_NUMBER"
-          
-          # Wait for build completion with better logic
-          echo "Waiting for build completion..."
-          WAIT_COUNT=0
-          MAX_WAIT=8  # Increased from 4
-          
-          while [ "$BUILD_RESULT" = "null" ] || [ -z "$BUILD_RESULT" ]; do
-            if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
-              echo "Timeout waiting for build completion after $((MAX_WAIT * 30)) seconds"
-              break
-            fi
-            
-            echo "Build still running (attempt $((WAIT_COUNT + 1))/$MAX_WAIT), waiting 30 seconds..."
-            sleep 30
-            WAIT_COUNT=$((WAIT_COUNT + 1))
-            
-            # Retry getting build info
-            API_URL="${JENKINS_URL}/job/lsa/job/Workspace-Caching/job/2048/lastBuild/api/json"
-            BUILD_INFO=$(curl -s -u "${JENKINS_USERNAME}:${JENKINS_TOKEN}" "$API_URL" 2>/dev/null || echo "{}")
-            
-            if [ "$BUILD_INFO" != "{}" ]; then
-              BUILD_RESULT=$(echo "$BUILD_INFO" | jq -r '.result // empty' 2>/dev/null || echo "")
-              echo "Current build result: $BUILD_RESULT"
-            else
-              echo "Warning: Could not get build info on attempt $((WAIT_COUNT + 1))"
-            fi
-          done
-          
-          echo "Final build result: $BUILD_RESULT"
           
           # Function to get artifacts with retry
           get_artifacts() {
@@ -238,7 +226,6 @@ jobs:
             echo "Valid APK URL found: $APK_URL"
           else
             echo "No valid APK URL found after all attempts"
-            echo "Build result was: $BUILD_RESULT"
             echo "This might indicate a Jenkins job failure or timing issue"
             
             # Set placeholder values but don't fail the workflow
