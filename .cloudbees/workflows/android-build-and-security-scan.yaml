@@ -24,6 +24,36 @@ jobs:
           username: ${{ secrets.JENKINS_USERNAME }}
           token: ${{ secrets.JENKINS_TOKEN }}
           job-name: lsa/job/Workspace-Caching/job/2048
+
+      - name: Verify Jenkins Job Status
+        uses: docker://alpine:latest
+        env:
+          JENKINS_URL: https://core.cloudbees.guru/shared-demos/
+          JENKINS_USERNAME: ${{ secrets.JENKINS_USERNAME }}
+          JENKINS_TOKEN: ${{ secrets.JENKINS_TOKEN }}
+          JOB_NAME: lsa/job/Workspace-Caching/job/2048
+        run: |
+          apk add --no-cache curl jq
+          
+          # Attendre un peu pour s'assurer que Jenkins a fini de mettre à jour
+          sleep 10
+          
+          # Vérifier le statut du dernier build
+          BUILD_INFO=$(curl -s -u "${JENKINS_USERNAME}:${JENKINS_TOKEN}" \
+            "${JENKINS_URL}/job/lsa/job/Workspace-Caching/job/2048/lastBuild/api/json")
+          
+          BUILD_RESULT=$(echo "$BUILD_INFO" | jq -r '.result // empty')
+          BUILD_NUMBER=$(echo "$BUILD_INFO" | jq -r '.number // empty')
+          
+          echo "Build #${BUILD_NUMBER} result: ${BUILD_RESULT}"
+          
+          if [ "$BUILD_RESULT" = "SUCCESS" ]; then
+            echo "✅ Jenkins job completed successfully"
+            exit 0
+          else
+            echo "❌ Jenkins job failed with result: ${BUILD_RESULT}"
+            exit 1
+          fi
           
       - name: Extract APK URL from Jenkins with retry logic
         id: extract-apk-url
