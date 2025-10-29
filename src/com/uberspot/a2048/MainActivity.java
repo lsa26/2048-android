@@ -24,8 +24,6 @@ import android.widget.Toast;
 
 import java.util.Locale;
 
-import de.cketti.changelog.dialog.DialogChangeLog;
-
 public class MainActivity extends Activity {
 
     private static final String MAIN_ACTIVITY_TAG = "2048_MainActivity";
