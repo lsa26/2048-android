@@ -23,7 +23,7 @@ import android.webkit.WebViewClient;
 import android.widget.Toast;
 
 import java.util.Locale;
-import io.rollout.flags.RoxFlag;
+import android.os.Handler;
 
 public class MainActivity extends Activity {
 
@@ -36,6 +36,8 @@ public class MainActivity extends Activity {
     private long mLastTouch;
     private static final long mTouchThreshold = 2000;
     private Toast pressBackToast;
+    private Handler flagHandler;
+    private String lastBackgroundColor;
 
     @SuppressLint({"SetJavaScriptEnabled", "ShowToast", "ClickableViewAccessibility"})
     @Override
@@ -126,8 +128,8 @@ public class MainActivity extends Activity {
         // Met aussi la couleur dès maintenant (avant la fin de chargement) pour le décor
         applyBackgroundFromFlag();
         
-        // Ajouter un listener pour les changements de feature flag en temps réel
-        setupFlagListener();
+        // Démarrer le polling pour les changements de feature flag
+        startFlagPolling();
     }
 
     @Override
@@ -136,6 +138,15 @@ public class MainActivity extends Activity {
         // Ré-applique (utile si le flag a changé pendant que l’app était en pause)
         applyBackgroundFromFlag();
         mWebView.loadUrl("file:///android_asset/2048/index.html?lang=" + Locale.getDefault().getLanguage());
+        if (flagHandler == null) {
+            startFlagPolling();
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        stopFlagPolling();
     }
 
     @Override
@@ -185,23 +196,37 @@ public class MainActivity extends Activity {
     // ---------- Background helpers ----------
 
     /**
-     * Configure un listener pour détecter les changements de feature flag en temps réel
+     * Démarre un polling périodique pour vérifier les changements de feature flag
      */
-    private void setupFlagListener() {
-        if (App.flags != null && App.flags.backgroundColor != null) {
-            App.flags.backgroundColor.setOnValueChangedListener(new RoxFlag.OnValueChangedListener() {
-                @Override
-                public void onValueChanged(String oldValue, String newValue) {
-                    Log.i(MAIN_ACTIVITY_TAG, "Background color flag changed from " + oldValue + " to " + newValue);
-                    // Applique immédiatement la nouvelle couleur
-                    runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            applyBackgroundFromFlag();
-                        }
-                    });
+    private void startFlagPolling() {
+        if (flagHandler != null) return;
+        
+        flagHandler = new Handler();
+        lastBackgroundColor = App.flags.backgroundColor.getValue();
+        
+        final Runnable flagChecker = new Runnable() {
+            @Override
+            public void run() {
+                String currentColor = App.flags.backgroundColor.getValue();
+                if (!currentColor.equals(lastBackgroundColor)) {
+                    Log.i(MAIN_ACTIVITY_TAG, "Background color changed from " + lastBackgroundColor + " to " + currentColor);
+                    lastBackgroundColor = currentColor;
+                    applyBackgroundFromFlag();
                 }
-            });
+                flagHandler.postDelayed(this, 1000); // Vérifier toutes les secondes
+            }
+        };
+        
+        flagHandler.post(flagChecker);
+    }
+
+    /**
+     * Arrête le polling des feature flags
+     */
+    private void stopFlagPolling() {
+        if (flagHandler != null) {
+            flagHandler.removeCallbacksAndMessages(null);
+            flagHandler = null;
         }
     }
 
