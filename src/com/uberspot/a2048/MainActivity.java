@@ -23,6 +23,7 @@ import android.webkit.WebViewClient;
 import android.widget.Toast;
 
 import java.util.Locale;
+import io.rollout.flags.RoxFlag;
 
 public class MainActivity extends Activity {
 
@@ -124,6 +125,9 @@ public class MainActivity extends Activity {
 
         // Met aussi la couleur dès maintenant (avant la fin de chargement) pour le décor
         applyBackgroundFromFlag();
+        
+        // Ajouter un listener pour les changements de feature flag en temps réel
+        setupFlagListener();
     }
 
     @Override
@@ -179,6 +183,27 @@ public class MainActivity extends Activity {
     }
 
     // ---------- Background helpers ----------
+
+    /**
+     * Configure un listener pour détecter les changements de feature flag en temps réel
+     */
+    private void setupFlagListener() {
+        if (App.flags != null && App.flags.backgroundColor != null) {
+            App.flags.backgroundColor.setOnValueChangedListener(new RoxFlag.OnValueChangedListener() {
+                @Override
+                public void onValueChanged(String oldValue, String newValue) {
+                    Log.i(MAIN_ACTIVITY_TAG, "Background color flag changed from " + oldValue + " to " + newValue);
+                    // Applique immédiatement la nouvelle couleur
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            applyBackgroundFromFlag();
+                        }
+                    });
+                }
+            });
+        }
+    }
 
     private void applyBackgroundFromFlag() {
         String value = App.flags.backgroundColor.getValue();
